@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from "react";
+import React, { useState, useEffect } from "react";
 import ModalHeader from "./ModalHeader";
 import StatusUpdateForm from "./StatusUpdateForm";
 import MemberFields from "./MemberFields";
 import { getStatusChangeMessage } from "../../../utils/adminMessages";
+
 const MembershipRequestModal = ({
   member,
   isOpen,
@@ -10,47 +11,44 @@ const MembershipRequestModal = ({
   statuses,
   onStatusUpdate,
 }) => {
-  const [isMessageExpanded, setIsMessageExpanded] = useState(false);
   const [newStatusId, setNewStatusId] = useState("");
   const [message, setMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  const [isMessageExpanded, setIsMessageExpanded] = useState(false);
 
   useEffect(() => {
-    if (member && statuses.length > 0) {
+    if (isOpen && member && statuses.length > 0) {
       const currentStatusName = member.status?.name;
       if (currentStatusName) {
         const matchingStatus = statuses.find(
           (status) => status.name === currentStatusName
         );
-        if (matchingStatus) {
-          setNewStatusId(String(matchingStatus.id));
-        } else {
-          console.warn("No matching status found for:", currentStatusName);
-          setNewStatusId("");
-        }
-      }
-    }
-  }, [member, statuses]);
-
-  useEffect(() => {
-    if (!member || !newStatusId) return;
-
-    const currentStatusId = statuses.find(
-      (s) => s.name === member.status?.name
-    )?.id;
-    if (newStatusId !== String(currentStatusId)) {
-      const selectedStatus = statuses.find(
-        (status) => String(status.id) === newStatusId
-      );
-      if (selectedStatus) {
-        setMessage(getStatusChangeMessage(selectedStatus.slug));
+        setNewStatusId(matchingStatus ? String(matchingStatus.id) : "");
       }
     } else {
+      setNewStatusId("");
       setMessage("");
+      setIsMessageExpanded(false);
     }
+  }, [isOpen, member, statuses]);
 
-    return () => setMessage("");
-  }, [newStatusId, statuses, member]);
+  useEffect(() => {
+    if (newStatusId && member) {
+      const currentStatusId = statuses.find(
+        (s) => s.name === member.status?.name
+      )?.id;
+      if (newStatusId !== String(currentStatusId)) {
+        const selectedStatus = statuses.find(
+          (status) => String(status.id) === newStatusId
+        );
+        if (selectedStatus) {
+          setMessage(getStatusChangeMessage(selectedStatus.slug) || "");
+        }
+      } else {
+        setMessage("");
+      }
+    }
+  }, [newStatusId, member, statuses]);
 
   if (!isOpen || !member) return null;
 
@@ -75,7 +73,11 @@ const MembershipRequestModal = ({
             }
             isSaving={isSaving}
             setIsSaving={setIsSaving}
-            onSave={onStatusUpdate}
+            onSave={(userId, statusId, msg) => {
+              onStatusUpdate(userId, statusId, msg);
+              setIsSaving(false);
+              onClose();
+            }}
             onCancel={onClose}
             userId={member.id}
           />
@@ -84,4 +86,5 @@ const MembershipRequestModal = ({
     </div>
   );
 };
+
 export default MembershipRequestModal;

@@ -38,9 +38,15 @@ const StatusUpdateForm = ({
         status_id: newStatusId,
         message: message,
       };
-      await membershipService.updateStatusWithMessage(userId, payload);
-      await onSave(userId, newStatusId, message);
-      notify.success("Status updated successfully");
+      console.log("Sending PUT request", payload); // Debug log
+      const response = await membershipService.updateStatusWithMessage(
+        userId,
+        payload
+      );
+      const newStatus =
+        statuses.find((s) => s.id === Number(newStatusId))?.name || "Unknown";
+      onSave(userId, newStatusId, message, newStatus);
+      notify.success(`Status updated to ${newStatus}`);
       setIsSaving(false);
       onCancel();
     } catch (err) {

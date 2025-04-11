@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import membershipService from "../../services/membershipService"; // Confirm this path
+import React, { useState, useEffect, useCallback } from "react";
+import membershipService from "../../services/membershipService";
 import statusService from "../../services/statusService";
 import MembershipDataTable from "./components/MembershipDataTable";
 import MembershipRequestModal from "./components/MembershipRequestModal";
@@ -14,6 +14,8 @@ const MembershipRequestPage = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   useEffect(() => {
+    let mounted = true;
+
     const fetchData = async () => {
       setLoading(true);
       try {
@@ -22,37 +24,45 @@ const MembershipRequestPage = () => {
           statusService.getAll(),
         ]);
 
-        if (membersResponse.success) {
-          setMembers(membersResponse.data);
-        } else {
-          throw new Error(membersResponse.message || "Failed to fetch members");
-        }
+        if (mounted) {
+          if (membersResponse.success) {
+            setMembers(membersResponse.data);
+          } else {
+            throw new Error(
+              membersResponse.message || "Failed to fetch members"
+            );
+          }
 
-        if (statusesResponse.success) {
-          setStatuses(statusesResponse.data);
-        } else {
-          throw new Error(
-            statusesResponse.message || "Failed to fetch statuses"
-          );
+          if (statusesResponse.success) {
+            setStatuses(statusesResponse.data);
+          } else {
+            throw new Error(
+              statusesResponse.message || "Failed to fetch statuses"
+            );
+          }
         }
       } catch (err) {
-        const errorMessage = err.message || "Failed to fetch data";
-        setError(errorMessage);
-        notify.error(errorMessage);
+        if (mounted) {
+          const errorMessage = err.message || "Failed to fetch data";
+          setError(errorMessage);
+          notify.error(errorMessage);
+        }
       } finally {
-        setLoading(false);
+        if (mounted) {
+          setLoading(false);
+        }
       }
     };
 
     fetchData();
+
+    return () => {
+      mounted = false;
+    };
   }, []);
 
-  const handleStatusUpdate = async (memberId, newStatusId, message) => {
-    try {
-      await membershipService.updateStatusWithMessage(userId, {
-        status_id: newStatusId,
-        message,
-      });
+  const handleStatusUpdate = useCallback(
+    (memberId, newStatusId, message) => {
       setMembers((prevMembers) =>
         prevMembers.map((m) =>
           m.id === memberId
@@ -63,10 +73,11 @@ const MembershipRequestPage = () => {
             : m
         )
       );
-    } catch (err) {
-      throw err;
-    }
-  };
+      setIsModalOpen(false);
+      setSelectedMember(null);
+    },
+    [statuses]
+  );
 
   const handleViewClick = (member) => {
     setSelectedMember(member);

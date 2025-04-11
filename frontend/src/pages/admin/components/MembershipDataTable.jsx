@@ -51,7 +51,7 @@ const MembershipDataTable = ({ members, onViewClick }) => {
             ))
           ) : (
             <tr>
-              <td colSpan="4" className="p-6 text-center text-gray-500">
+              <td colSpan="5" className="p-6 text-center text-gray-500">
                 No membership requests found.
               </td>
             </tr>
