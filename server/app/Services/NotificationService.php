@@ -1,146 +1,213 @@
-<?
+<?php
+
 namespace App\Services;
 
 use App\Models\User;
 use App\Models\Status;
-use App\Models\UserNotificationMessage;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 use App\Mail\StatusUpdateNotification;
+use App\Models\UserNotificationMessage;
 
 class NotificationService
 {
-  private const FRONTEND_URL = env(self::FRONTEND_URL, 'http://localhost:5173');
+  private const FRONTEND_URL = 'APP_FRONTEND_URL';
+  private $sentNotifications = [];
 
-  /**
-   * Send a status update notification to a user.
-   */
-  public function sendStatusUpdate(User $user, Status $status, ?int $updatedBy = null): void
-  {
-    $message = $this->getStatusMessage($status);
-    $resetUrl = $this->getResetUrl($user, $status);
-
-    if ($status->slug === 'approved') {
-      $message .= "\n\nTemporary Password: {$user->password}";
-    }
-
-    $this->processNotification($user, $status, $message, $resetUrl, $updatedBy ?? auth()->user()?->id, 'sent');
-  }
-
-  /**
-   * Send a notification when a membership request is received.
-   */
   public function sendRequestReceivedNotification(User $user, array $submittedData): void
   {
     $message = $this->buildRequestReceivedMessage($submittedData);
-    $this->processNotification($user, $user->status, $message, null, null, 'pending');
+    $this->sendNotification($user, $user->status, $message, null, 'pending');
   }
 
-  /**
-   * Send an approval notification with a temporary password.
-   */
   public function sendApprovalNotification(User $user, string $tempPassword): void
   {
-    $message = $this->buildApprovalMessage($user, $tempPassword);
-    $this->processNotification($user, $user->status, $message, null, auth()->user()->id, 'approved');
+    $resetUrl = $this->buildResetUrl($user);
+    $message = $this->buildApprovalMessage($tempPassword, $resetUrl);
+    $this->sendNotification($user, $user->status, $message, $resetUrl, 'approved');
   }
 
-  /**
-   * Build the message for a received membership request.
-   */
+  public function sendStatusUpdate(User $user, Status $status, ?int $updatedBy = null): void
+  {
+    $key = "{$user->id}-{$status->slug}-" . time();
+    if (in_array($key, $this->sentNotifications)) {
+      Log::warning('Duplicate notification attempt prevented', [
+        'user_id' => $user->id,
+        'status' => $status->slug,
+        'key' => $key,
+      ]);
+      return;
+    }
+
+    Log::info('sendStatusUpdate called', [
+      'user_id' => $user->id,
+      'status' => $status->slug,
+      'updatedBy' => $updatedBy,
+      'key' => $key,
+    ]);
+
+    switch ($status->slug) {
+      case 'rejected':
+        $this->sendRejectedNotification($user, $status, $updatedBy);
+        break;
+      case 'suspended':
+        $this->sendSuspendedNotification($user, $status, $updatedBy);
+        break;
+      case 'pending':
+      case 'approved':
+        break;
+      default:
+        $this->sendGenericStatusUpdate($user, $status, $updatedBy);
+        break;
+    }
+
+    $this->sentNotifications[] = $key;
+    Log::info('Notification added to sent list', ['key' => $key]);
+  }
+
+  private function sendRejectedNotification(User $user, Status $status, ?int $updatedBy): void
+  {
+    $message = $this->buildStatusUpdateMessage($user, $status, "Your registration request has been rejected.");
+    $this->sendNotification($user, $status, $message, null, 'sent', $updatedBy);
+  }
+
+  private function sendSuspendedNotification(User $user, Status $status, ?int $updatedBy): void
+  {
+    $message = $this->buildStatusUpdateMessage($user, $status, "Your registration has been suspended.");
+    $this->sendNotification($user, $status, $message, null, 'sent', $updatedBy);
+  }
+
+  private function sendGenericStatusUpdate(User $user, Status $status, ?int $updatedBy): void
+  {
+    $message = $this->buildStatusUpdateMessage($user, $status, "Your registration status has been updated to {$status->name}.");
+    $this->sendNotification($user, $status, $message, null, 'sent', $updatedBy);
+  }
+
   private function buildRequestReceivedMessage(array $submittedData): string
   {
-    $message = "Your membership request has been received. Here’s what we’ve recorded:\n";
-    $message .= "- Email: {$submittedData['email']}\n";
-    $message .= "- Name: {$submittedData['name']}\n";
-    $message .= "- Role: {$submittedData['role']}\n";
-    if (isset($submittedData['bank_type_id'])) {
-      $message .= "- Bank Type ID: {$submittedData['bank_type_id']}\n";
+    return implode("\n", [
+      "Your membership request has been received. Here’s what we’ve recorded:",
+      "- Email: {$submittedData['email']}",
+      "- Name: {$submittedData['name']}",
+      "- Role: {$submittedData['role']}",
+      isset($submittedData['bank_type_name']) ? "- Bank Type: {$submittedData['bank_type_name']}" : "",
+      "- Message: {$submittedData['message']}",
+      "We’ll review your request and get back to you soon.",
+    ]);
+  }
+
+  private function buildApprovalMessage(string $tempPassword, string $resetUrl): string
+  {
+    return json_encode([
+      'title' => 'Membership Request Approved',
+      'intro' => 'Your membership request has been approved!',
+      'tempPassword' => $tempPassword,
+      'resetUrl' => htmlspecialchars($resetUrl),
+    ], JSON_THROW_ON_ERROR);
+  }
+
+  private function buildStatusUpdateMessage(User $user, Status $status, string $statusMessage): string
+  {
+    $role = $user->role ? $user->role->name : 'N/A';
+    $bankType = ($user->role && $user->role->slug === 'bank')
+      ? ($user->bankType->name ?? 'N/A')
+      : null;
+
+    $details = [
+      'Name' => $user->name ?? 'N/A',
+      'Email' => $user->email ?? 'N/A',
+      'Applied On' => $user->created_at ? $user->created_at->format('Y-m-d H:i:s') : 'N/A',
+      'Current Status' => $status->name ?? 'N/A',
+      'Role' => $role,
+    ];
+
+    if ($bankType) {
+      $details['Bank Type'] = $bankType;
     }
-    $message .= "- Message: {$submittedData['message']}\n\n";
-    $message .= "We’ll review your request and get back to you soon.";
 
-    return $message;
+    try {
+      return json_encode([
+        'title' => 'Membership Status Update',
+        'intro' => $statusMessage,
+        'details' => $details,
+      ], JSON_THROW_ON_ERROR);
+    } catch (\JsonException $e) {
+      Log::error('Failed to encode JSON for status update', [
+        'user_id' => $user->id,
+        'error' => $e->getMessage(),
+      ]);
+      return json_encode([
+        'title' => 'Membership Status Update',
+        'intro' => $statusMessage,
+        'details' => ['Error' => 'Unable to load details'],
+      ]);
+    }
   }
 
-  /**
-   * Build the approval message with temporary password.
-   */
-  private function buildApprovalMessage(User $user, string $tempPassword): string
-  {
-    $resetUrl = $this->getResetUrl($user);
-    return "Your membership request has been approved! Use this temporary password to set your own: {$tempPassword}\nReset here: {$resetUrl}";
-  }
-
-  /**
-   * Get the status update message based on status slug.
-   */
-  private function getStatusMessage(Status $status): string
-  {
-    return match ($status->slug) {
-      'approved' => "Your registration has been approved! Please update your password to proceed.",
-      'rejected' => "Your registration request has been rejected.",
-      'suspended' => "Your registration has been suspended.",
-      'pending' => "Your registration status is now pending review.",
-      default => "Your registration status has been updated to {$status->name}."
-    };
-  }
-
-  /**
-   * Get the password reset URL if applicable.
-   */
-  private function getResetUrl(User $user, ?Status $status = null): ?string
+  private function buildResetUrl(User $user): string
   {
     $frontendUrl = env(self::FRONTEND_URL, 'http://localhost:5173');
-    return $status && $status->slug === 'approved'
-      ? "{$frontendUrl}/reset-password?email=" . urlencode($user->email) . "&token=" . $user->password_reset_token
-      : null;
+    return "{$frontendUrl}/reset-password?email=" . urlencode($user->email) . "&token=" . $user->password_reset_token;
   }
 
-  /**
-   * Process and send the notification, handling creation and email delivery.
-   */
-  private function processNotification(
+  private function sendNotification(
     User $user,
     Status $status,
     string $message,
     ?string $resetUrl,
-    ?int $createdBy,
-    string $initialStatus
+    string $initialDeliveryStatus,
+    ?int $createdBy = null
   ): void {
-    $notification = UserNotificationMessage::create([
+    $notification = $this->createNotification($user, $status, $message, $initialDeliveryStatus, $createdBy);
+    $emailSent = $this->sendEmail($user, $status, $message, $resetUrl, $notification);
+    $this->updateNotificationStatus($notification, $emailSent);
+    $this->handleEmailFailure($user, $status, $emailSent);
+  }
+
+  private function createNotification(
+    User $user,
+    Status $status,
+    string $message,
+    string $deliveryStatus,
+    ?int $createdBy
+  ): UserNotificationMessage {
+    return UserNotificationMessage::create([
       'user_id' => $user->id,
       'status_id' => $status->id,
       'message' => $message,
-      'delivery_status' => $initialStatus,
+      'delivery_status' => $deliveryStatus,
       'created_by' => $createdBy,
     ]);
-
-    $emailSent = $this->sendEmail($user, $status, $message, $resetUrl, $notification);
-
-    $notification->update([
-      'delivery_status' => $emailSent ? 'sent' : 'failed',
-      'sent_at' => $emailSent ? now() : null,
-    ]);
-
-    if (!$emailSent) {
-      $this->handleDeliveryFailure($user, $status);
-    }
   }
 
-  /**
-   * Send the email notification.
-   */
-  private function sendEmail(User $user, Status $status, string $message, ?string $resetUrl, UserNotificationMessage $notification): bool
-  {
+  private function sendEmail(
+    User $user,
+    Status $status,
+    string $message,
+    ?string $resetUrl,
+    UserNotificationMessage $notification
+  ): bool {
     try {
-      Mail::to($user->email)->send(new StatusUpdateNotification($user, $status, $message, $resetUrl));
+      Log::info('Attempting to send email', [
+        'user_id' => $user->id,
+        'email' => $user->email,
+        'status' => $status->slug,
+        'message' => $message,
+        'resetUrl' => $resetUrl,
+      ]);
+      Mail::to($user->email)->send(
+        new StatusUpdateNotification($user, $status, $message, $resetUrl)
+      );
       Log::info('Email sent successfully', ['user_id' => $user->id, 'email' => $user->email]);
       return true;
     } catch (\Exception $e) {
       Log::error('Failed to send notification email', [
         'user_id' => $user->id,
+        'email' => $user->email,
         'status' => $status->slug,
+        'message' => $message,
         'error' => $e->getMessage(),
         'trace' => $e->getTraceAsString(),
       ]);
@@ -148,14 +215,21 @@ class NotificationService
     }
   }
 
-  /**
-   * Handle failed email delivery.
-   */
-  private function handleDeliveryFailure(User $user, Status $status): void
+  private function updateNotificationStatus(UserNotificationMessage $notification, bool $emailSent): void
   {
-    Log::warning("Email delivery failed for user {$user->id}", ['email' => $user->email]);
-    if ($status->slug !== 'pending') { // Only throw for critical statuses
-      throw new \Exception("Email delivery failed for user {$user->id}");
+    $notification->update([
+      'delivery_status' => $emailSent ? 'sent' : 'failed',
+      'sent_at' => $emailSent ? now() : null,
+    ]);
+  }
+
+  private function handleEmailFailure(User $user, Status $status, bool $emailSent): void
+  {
+    if (!$emailSent) {
+      Log::warning("Email delivery failed for user {$user->id}", [
+        'email' => $user->email,
+        'status' => $status->slug,
+      ]);
     }
   }
 }

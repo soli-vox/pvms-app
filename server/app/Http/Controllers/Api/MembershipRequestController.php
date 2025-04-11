@@ -2,17 +2,16 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Models\BankType;
-use App\Models\Role;
 use App\Models\User;
 use App\Models\Status;
+use App\Models\Role;
+use App\Models\BankType;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Str;
 use App\Traits\ModelFetcher;
-use Illuminate\Http\Request;
 use App\Traits\HandlesApiActions;
 use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Facades\Auth;
 use App\Services\NotificationService;
 use App\Http\Requests\StoreJoinUsRequest;
 use App\Http\Resources\MembershipRequestResource;
@@ -29,62 +28,30 @@ class MembershipRequestController extends ApiController
         $this->notificationService = $notificationService;
     }
 
-    public function index()
+    public function index(Request $request)
     {
-        return $this->withExceptionHandling(function () {
+        return $this->withExceptionHandling(function () use ($request) {
+            Log::info('Membership requests endpoint hit', ['headers' => $request->headers->all()]);
             $adminRole = $this->findModelBySlug(Role::class, 'admin', 'admin_role');
-            $users = User::where('role_id', '!=', $adminRole->id)
-                ->with(['role', 'status', 'bankType'])
-                ->get();
+            $users = $this->fetchNonAdminUsers($adminRole->id);
             Log::info('Users fetched for membership requests:', ['users' => $users->toArray()]);
-            return $this->successResponse('Membership requests retrieved successfully', ['members' => new MembershipRequestCollection($users)], 200);
+            return $this->successResponse(
+                'Membership requests retrieved successfully',
+                ['members' => new MembershipRequestCollection($users)],
+                200
+            );
         });
     }
-
 
     public function store(StoreJoinUsRequest $request)
     {
         return $this->withExceptionHandling(function () use ($request) {
-            if (User::where('email', $request->email)->exists()) {
-                return $this->errorResponse('Email already registered. Please contact support.', 422);
-            }
-            $role = Role::where('slug', $request->role)->first();
-            if (!$role) {
-                return $this->errorResponse('Please select appropriate role.', 404);
-            }
-            $bankTypeId = $request->input('bank_type_id');
-            $bankTypeName = null;
-            if ($request->role === 'bank' && $bankTypeId) {
-                $bankType = BankType::where('id', $bankTypeId)->first();
-                if (!$bankType) {
-                    return $this->errorResponse('Selected bank type does not exist.', 404);
-                }
-                $bankTypeName = $bankType->name;
-            }
-            $status = Status::where('slug', 'pending')->first();
-            if (!$status) {
-                return $this->errorResponse('Pending status not found.', 500);
-            }
-            $tempPassword = Str::random(12);
-            $userData = [
-                'email' => $request->email,
-                'name' => $request->name,
-                'role_id' => $role->id,
-                'status_id' => $status->id,
-                'bank_type_id' => $request->role === 'bank' ? $bankTypeId : null,
-                'message' => $request->message,
-                'password' => Hash::make($tempPassword),
-                'created_by' => null,
-                'updated_by' => null,
-            ];
-
-            $user = User::create($userData);
-            Log::info('User created:', $user->toArray());
-            $submittedData = $request->only(['email', 'name', 'role', 'bank_type_id', 'message']);
-            if ($bankTypeName) {
-                $submittedData['bank_type_name'] = $bankTypeName; // Add name for notification
-            }
-            $this->notificationService->sendRequestReceivedNotification($user, $submittedData);
+            $this->validateEmailAvailability($request->email);
+            $role = $this->fetchRole($request->role);
+            $bankType = $this->fetchBankTypeIfApplicable($request);
+            $status = $this->fetchPendingStatus();
+            $user = $this->createUser($request, $role, $bankType, $status);
+            $this->sendRequestReceivedNotification($user, $request, $bankType);
 
             return $this->successResponse(
                 'Registration request submitted successfully. You will receive your password once approved.',
@@ -94,55 +61,162 @@ class MembershipRequestController extends ApiController
         });
     }
 
-
-
     public function updateStatus(Request $request, $userId)
     {
         return $this->withExceptionHandling(function () use ($request, $userId) {
-            $request->validate([
-                'status_id' => 'required|exists:statuses,id',
-                'message' => 'required|string|max:1000',
-            ]);
-            $user = User::find($userId);
-            if (!$user) {
-                return $this->errorResponse('User not found.', 404);
-            }
+            $this->validateStatusUpdateRequest($request);
+            $user = $this->fetchUser($userId);
+            $newStatus = $this->fetchStatus($request->status_id);
 
-            $newStatus = Status::find($request->status_id);
-            if (!$newStatus) {
-                return $this->errorResponse('Selected status not found.', 404);
-            }
-
-            // Check if status changed
-            if ($user->status_id === $newStatus->id) {
+            if ($this->isStatusUnchanged($user, $newStatus)) {
                 return $this->successResponse('No status change detected.', [], 200);
             }
 
-            // Update user status
-            $user->status_id = $newStatus->id;
-            $user->updated_by = auth()->user()->id;
-
-            if ($newStatus->slug === 'approved') {
-                $tempPassword = Str::random(12);
-                $user->password = Hash::make($tempPassword);
-                $user->password_reset_token = Str::random(60);
-                $user->password_updated = false;
-            }
-
-            $user->save();
-            Log::info('User status updated:', $user->toArray());
-
-            if ($newStatus->slug === 'approved') {
-                $this->notificationService->sendApprovalNotification($user, $tempPassword);
-            } else {
-                $this->notificationService->sendStatusUpdate($user, $newStatus, auth()->user()->id);
-            }
-
+            $this->updateUserStatus($user, $newStatus);
             return $this->successResponse(
                 "User status updated to {$newStatus->name}.",
                 ['member' => new MembershipRequestResource($user)],
                 200
             );
         });
+    }
+
+    private function fetchNonAdminUsers($adminRoleId)
+    {
+        return User::where('role_id', '!=', $adminRoleId)
+            ->with(['role', 'status', 'bankType'])
+            ->get();
+    }
+
+    private function validateEmailAvailability($email)
+    {
+        if (User::where('email', $email)->exists()) {
+            throw new \Exception('Email already registered. Please contact support.', 422);
+        }
+    }
+
+    private function fetchRole($roleSlug)
+    {
+        $role = Role::where('slug', $roleSlug)->first();
+        if (!$role) {
+            throw new \Exception('Please select appropriate role.', 404);
+        }
+        return $role;
+    }
+
+    private function fetchBankTypeIfApplicable(Request $request)
+    {
+        if ($request->role !== 'bank' || !$request->input('bank_type_id')) {
+            return null;
+        }
+
+        $bankType = BankType::where('id', $request->bank_type_id)->first();
+        if (!$bankType) {
+            throw new \Exception('Selected bank type does not exist.', 404);
+        }
+        return $bankType;
+    }
+
+    private function fetchPendingStatus()
+    {
+        $status = Status::where('slug', 'pending')->first();
+        if (!$status) {
+            throw new \Exception('Pending status not found.', 500);
+        }
+        return $status;
+    }
+
+    private function createUser(Request $request, Role $role, ?BankType $bankType, Status $status)
+    {
+        $tempPassword = Str::random(12);
+        $userData = [
+            'email' => $request->email,
+            'name' => $request->name,
+            'role_id' => $role->id,
+            'status_id' => $status->id,
+            'bank_type_id' => $bankType ? $bankType->id : null,
+            'message' => $request->message,
+            'password' => Hash::make($tempPassword),
+            'created_by' => null,
+            'updated_by' => null,
+        ];
+
+        $user = User::create($userData);
+        Log::info('User created:', $user->toArray());
+        return $user;
+    }
+
+    private function sendRequestReceivedNotification(User $user, Request $request, ?BankType $bankType)
+    {
+        $submittedData = $request->only(['email', 'name', 'role', 'bank_type_id', 'message']);
+        if ($bankType) {
+            $submittedData['bank_type_name'] = $bankType->name;
+        }
+        $this->notificationService->sendRequestReceivedNotification($user, $submittedData);
+    }
+
+    private function validateStatusUpdateRequest(Request $request)
+    {
+        $request->validate([
+            'status_id' => 'required|exists:statuses,id',
+            'message' => 'required|string|max:1000',
+        ]);
+    }
+
+    private function fetchUser($userId)
+    {
+        $user = User::find($userId);
+        if (!$user) {
+            throw new \Exception('User not found.', 404);
+        }
+        return $user;
+    }
+
+    private function fetchStatus($statusId)
+    {
+        $status = Status::find($statusId);
+        if (!$status) {
+            throw new \Exception('Selected status not found.', 404);
+        }
+        return $status;
+    }
+
+    private function isStatusUnchanged(User $user, Status $newStatus)
+    {
+        return $user->status_id === $newStatus->id;
+    }
+
+    private function updateUserStatus(User $user, Status $newStatus)
+    {
+        $user->status_id = $newStatus->id;
+        $user->updated_by = auth()->user()->id;
+
+        $tempPassword = null;
+        if ($newStatus->slug === 'approved') {
+            $tempPassword = Str::random(12);
+            $user->password = Hash::make($tempPassword);
+            $user->password_reset_token = Str::random(60);
+            $user->password_updated = false;
+        }
+
+        $user->save();
+        Log::info('User status updated:', $user->toArray());
+
+        $this->sendStatusNotification($user, $newStatus, $tempPassword);
+    }
+
+    private function sendStatusNotification(User $user, Status $newStatus, ?string $tempPassword = null)
+    {
+        Log::info('sendStatusNotification called', [
+            'user_id' => $user->id,
+            'status' => $newStatus->slug,
+            'tempPassword' => $tempPassword ? 'provided' : 'not provided',
+        ]);
+
+        if ($newStatus->slug === 'approved') {
+            $this->notificationService->sendApprovalNotification($user, $tempPassword);
+        } else {
+            $this->notificationService->sendStatusUpdate($user, $newStatus, auth()->user()->id);
+        }
     }
 }
