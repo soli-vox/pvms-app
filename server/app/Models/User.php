@@ -21,6 +21,7 @@ class User extends Authenticatable
         'message',
         'password_updated',
         'password_reset_token',
+        'password_reset_token_expires_at',
         'created_by',
         'updated_by',
     ];

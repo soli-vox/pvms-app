@@ -20,6 +20,7 @@ return new class extends Migration {
             $table->string('password');
             $table->string('message');
             $table->string('password_reset_token')->nullable();
+            $table->timestamp('password_reset_token_expires_at')->nullable();
             $table->boolean('password_updated')->default(false);
             $table->rememberToken();
             $table->timestamp('email_verified_at')->nullable();

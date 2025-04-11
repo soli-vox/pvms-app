@@ -196,6 +196,7 @@ class MembershipRequestController extends ApiController
             $tempPassword = Str::random(12);
             $user->password = Hash::make($tempPassword);
             $user->password_reset_token = Str::random(60);
+            $user->password_reset_token_expires_at = now()->addHours(24);
             $user->password_updated = false;
         }
 

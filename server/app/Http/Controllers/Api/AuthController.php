@@ -3,18 +3,25 @@
 namespace App\Http\Controllers\Api;
 
 use App\Models\User;
-use App\Models\Status;
-use Illuminate\Support\Facades\Log;
-use Illuminate\Support\Str;
 use Illuminate\Http\Request;
 use App\Http\Requests\LoginRequest;
+use Illuminate\Support\Facades\Log;
 use App\Http\Resources\UserResource;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use App\Services\NotificationService;
 use App\Http\Controllers\Api\ApiController;
+use Illuminate\Support\Facades\RateLimiter;
 
 class AuthController extends ApiController
 {
+    protected $notificationService;
+
+    public function __construct(NotificationService $notificationService)
+    {
+        $this->notificationService = $notificationService;
+    }
+
     public function login(LoginRequest $request)
     {
         try {
@@ -25,18 +32,18 @@ class AuthController extends ApiController
                 Log::info('Trying login', [
                     'User' => [
                         $user->status->slug,
-                        $user->password_update,
+                        $user->password_updated,
                         $user->role->slug
                     ]
                 ]);
 
                 if (!$user->status || $user->status->slug !== 'approved') {
                     Auth::logout();
-                    return $this->errorResponse('Account not approved');
+                    return $this->errorResponse('Account not approved', 403);
                 }
                 if (!$user->password_updated) {
                     Auth::logout();
-                    return $this->errorResponse('Password must be updated before login');
+                    return $this->errorResponse('Password must be updated before login', 403);
                 }
                 $token = $user->createToken($request->email)->plainTextToken;
                 $user->load(['status', 'role', 'bankType']);
@@ -45,7 +52,7 @@ class AuthController extends ApiController
                     ['token' => $token, 'user' => new UserResource($user)]
                 );
             }
-            return $this->errorResponse('Invalid credentials');
+            return $this->errorResponse('Invalid credentials', 401);
         } catch (\Exception $e) {
             return $this->handleException($e);
         }
@@ -59,6 +66,10 @@ class AuthController extends ApiController
 
     public function resetPassword(Request $request)
     {
+        $key = 'reset-password:' . $request->ip();
+        if (RateLimiter::tooManyAttempts($key, 5)) {
+            return $this->errorResponse('Too many attempts. Please try again later.', 429);
+        }
         try {
             $request->validate([
                 'email' => 'required|email|exists:users,email',
@@ -67,26 +78,50 @@ class AuthController extends ApiController
                 'new_password' => 'required|string|min:8|confirmed',
             ]);
 
-            $user = User::where('email', $request->email)->firstOrFail();
+            $user = User::where('email', $request->email)
+                ->where('password_reset_token', $request->token)
+                ->where('password_reset_token_expires_at', '>', now())
+                ->first();
 
-            if (!(Hash::check($request->temporary_password, $user->password)) || $user->password_reset_token !== $request->token) {
-                $pendingStatus = Status::where('slug', 'pending')->firstOrFail();
-                $newTempPassword = Str::random(12);
-                $user->status_id = $pendingStatus->id;
-                $user->password = bcrypt($newTempPassword);
-                $user->password_reset_token = null;
-                $user->password_updated = false;
-                $user->save();
-                return $this->errorResponse('Invalid temporary password or token...', 403);
+            if (!$user) {
+                Log::warning('Invalid reset attempt: user or token not found', [
+                    'email' => $request->email,
+                    'token' => $request->token,
+                ]);
+                return $this->errorResponse('Invalid or expired reset request', 403);
             }
 
-            $user->password = bcrypt($request->new_password);
+            if (!Hash::check($request->temporary_password, $user->password)) {
+                Log::warning('Invalid temporary password', [
+                    'user_id' => $user->id,
+                    'email' => $user->email,
+                ]);
+                // $this->notificationService->sendStatusUpdate($user, $user->status, auth()->user()->id);
+                return $this->errorResponse('Invalid reset request', 403);
+            }
+
+            // Update password
+            $user->password = Hash::make($request->new_password);
             $user->password_reset_token = null;
             $user->password_updated = true;
             $user->save();
-            return $this->successResponse('Password updated successfully...', null);
+
+            Log::info('Password reset successful', [
+                'user_id' => $user->id,
+                'email' => $user->email,
+            ]);
+            RateLimiter::clear($key);
+            $this->notificationService->sendPasswordResetSuccessNotification($user);
+            return $this->successResponse('Password updated successfully');
         } catch (\Exception $e) {
+            RateLimiter::hit($key, 60);
+            Log::error('Password reset failed', [
+                'email' => $request->email,
+                'error' => $e->getMessage(),
+            ]);
             return $this->handleException($e);
         }
     }
+
+
 }

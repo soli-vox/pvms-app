@@ -2,6 +2,7 @@
 
 namespace Database\Seeders;
 
+use App\Models\BankType;
 use App\Models\Role;
 use App\Models\User;
 use App\Models\Status;
@@ -34,9 +35,13 @@ class DatabaseSeeder extends Seeder
             'role_id' => Role::where('slug', 'admin')->first()->id,
             'status_id' => Status::where('name', 'approved')->first()->id,
             'password_updated' => true,
-            'message'=>'Why do i need message huh!',
-            'created_by' => null, 
+            'message' => 'Why do i need message huh!',
+            'created_by' => null,
             'updated_by' => null,
         ]);
+
+        BankType::create(['name' => 'Commercial Bank', 'slug' => 'commercial-bank', 'description' => 'Governed by NRB', 'created_by' => 1, 'updated_by' => 1]);
+        BankType::create(['name' => 'Government Bank', 'slug' => 'government-bank', 'description' => 'Governed by NRB', 'created_by' => 1, 'updated_by' => 1]);
+        BankType::create(['name' => 'Development Bank', 'slug' => 'development-bank', 'description' => 'Governed by NRB', 'created_by' => 1, 'updated_by' => 1]);
     }
 }

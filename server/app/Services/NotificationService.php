@@ -67,6 +67,15 @@ class NotificationService
     Log::info('Notification added to sent list', ['key' => $key]);
   }
 
+  /**
+   * Send a notification to confirm a successful password reset.
+   */
+  public function sendPasswordResetSuccessNotification(User $user): void
+  {
+    $message = $this->buildPasswordResetSuccessMessage($user);
+    $this->sendNotification($user, $user->status, $message, null, 'sent');
+  }
+
   private function sendRejectedNotification(User $user, Status $status, ?int $updatedBy): void
   {
     $message = $this->buildStatusUpdateMessage($user, $status, "Your registration request has been rejected.");
@@ -87,15 +96,23 @@ class NotificationService
 
   private function buildRequestReceivedMessage(array $submittedData): string
   {
-    return implode("\n", [
-      "Your membership request has been received. Here’s what we’ve recorded:",
-      "- Email: {$submittedData['email']}",
-      "- Name: {$submittedData['name']}",
-      "- Role: {$submittedData['role']}",
-      isset($submittedData['bank_type_name']) ? "- Bank Type: {$submittedData['bank_type_name']}" : "",
-      "- Message: {$submittedData['message']}",
-      "We’ll review your request and get back to you soon.",
-    ]);
+    $details = [
+      'Name' => $submittedData['name'] ?? 'N/A',
+      'Email' => $submittedData['email'] ?? 'N/A',
+      'Role' => ucfirst($submittedData['role']) ?? 'N/A',
+    ];
+
+    if (isset($submittedData['bank_type_name'])) {
+      $details['Bank Type'] = $submittedData['bank_type_name'];
+    }
+
+    $details['Message'] = $submittedData['message'] ?? 'N/A';
+
+    return json_encode([
+      'title' => 'Membership Request Received',
+      'intro' => 'Your membership request has been received. Here’s what we’ve recorded:',
+      'details' => $details,
+    ], JSON_THROW_ON_ERROR);
   }
 
   private function buildApprovalMessage(string $tempPassword, string $resetUrl): string
@@ -127,20 +144,35 @@ class NotificationService
       $details['Bank Type'] = $bankType;
     }
 
+    return json_encode([
+      'title' => 'Membership Status Update',
+      'intro' => $statusMessage,
+      'details' => $details,
+    ], JSON_THROW_ON_ERROR);
+  }
+
+  private function buildPasswordResetSuccessMessage(User $user): string
+  {
+    $details = [
+      'Name' => $user->name ?? 'N/A',
+      'Email' => $user->email,
+      'Updated On' => now()->format('Y-m-d H:i:s'),
+    ];
+
     try {
       return json_encode([
-        'title' => 'Membership Status Update',
-        'intro' => $statusMessage,
+        'title' => 'Password Reset Successful',
+        'intro' => 'Your password has been successfully updated. You can now log in with your new password.',
         'details' => $details,
       ], JSON_THROW_ON_ERROR);
     } catch (\JsonException $e) {
-      Log::error('Failed to encode JSON for status update', [
+      Log::error('Failed to encode JSON for password reset success', [
         'user_id' => $user->id,
         'error' => $e->getMessage(),
       ]);
       return json_encode([
-        'title' => 'Membership Status Update',
-        'intro' => $statusMessage,
+        'title' => 'Password Reset Successful',
+        'intro' => 'Your password has been successfully updated.',
         'details' => ['Error' => 'Unable to load details'],
       ]);
     }

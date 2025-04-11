@@ -28,9 +28,11 @@ class StatusUpdateNotification extends Mailable
     public function build()
     {
         $data = json_decode($this->message, true) ?? ['intro' => $this->message];
+        $statusName = $this->status->name ?? 'Update';
+        $title = "Membership Status: {$statusName}";
         return $this->subject($data['title'] ?? 'Membership Status Update')
             ->view('emails.status_update', [
-                'title' => $data['title'] ?? 'Membership Status Update',
+                'title' => $title,
                 'intro' => $data['intro'] ?? 'Your membership status has been updated.',
                 'details' => $data['details'] ?? null,
                 'tempPassword' => $data['tempPassword'] ?? null,
