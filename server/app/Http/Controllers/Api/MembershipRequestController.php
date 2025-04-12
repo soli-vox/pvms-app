@@ -31,10 +31,8 @@ class MembershipRequestController extends ApiController
     public function index(Request $request)
     {
         return $this->withExceptionHandling(function () use ($request) {
-            Log::info('Membership requests endpoint hit', ['headers' => $request->headers->all()]);
             $adminRole = $this->findModelBySlug(Role::class, 'admin', 'admin_role');
-            $users = $this->fetchNonAdminUsers($adminRole->id);
-            Log::info('Users fetched for membership requests:', ['users' => $users->toArray()]);
+            $users = $this->fetchNonAdminMembers($adminRole->id);
             return $this->successResponse(
                 'Membership requests retrieved successfully',
                 ['members' => new MembershipRequestCollection($users)],
@@ -71,7 +69,6 @@ class MembershipRequestController extends ApiController
             if ($this->isStatusUnchanged($user, $newStatus)) {
                 return $this->successResponse('No status change detected.', [], 200);
             }
-
             $this->updateUserStatus($user, $newStatus);
             return $this->successResponse(
                 "User status updated to {$newStatus->name}.",
@@ -81,7 +78,7 @@ class MembershipRequestController extends ApiController
         });
     }
 
-    private function fetchNonAdminUsers($adminRoleId)
+    private function fetchNonAdminMembers($adminRoleId)
     {
         return User::where('role_id', '!=', $adminRoleId)
             ->with(['role', 'status', 'bankType'])
@@ -128,7 +125,6 @@ class MembershipRequestController extends ApiController
 
     private function createUser(Request $request, Role $role, ?BankType $bankType, Status $status)
     {
-        $tempPassword = Str::random(12);
         $userData = [
             'email' => $request->email,
             'name' => $request->name,
@@ -136,13 +132,12 @@ class MembershipRequestController extends ApiController
             'status_id' => $status->id,
             'bank_type_id' => $bankType ? $bankType->id : null,
             'message' => $request->message,
-            'password' => Hash::make($tempPassword),
+            'password' => null,
             'created_by' => null,
             'updated_by' => null,
         ];
 
         $user = User::create($userData);
-        Log::info('User created:', $user->toArray());
         return $user;
     }
 
@@ -152,6 +147,9 @@ class MembershipRequestController extends ApiController
         if ($bankType) {
             $submittedData['bank_type_name'] = $bankType->name;
         }
+        $submittedData['tempPassword'] = Str::random(12);
+        $user->password = Hash::make($submittedData['tempPassword']);
+        $user->save();
         $this->notificationService->sendRequestReceivedNotification($user, $submittedData);
     }
 
@@ -188,30 +186,33 @@ class MembershipRequestController extends ApiController
 
     private function updateUserStatus(User $user, Status $newStatus)
     {
+
         $user->status_id = $newStatus->id;
         $user->updated_by = auth()->user()->id;
 
         $tempPassword = null;
         if ($newStatus->slug === 'approved') {
             $tempPassword = Str::random(12);
-            $user->password = Hash::make($tempPassword);
+            $hashedPassword = Hash::make($tempPassword);
+            $user->password = $hashedPassword;
             $user->password_reset_token = Str::random(60);
-            $user->password_reset_token_expires_at = now()->addHours(24);
+            $user->password_reset_token_expires_at = now()->addHours(32);
             $user->password_updated = false;
+            $user->save();
+
+        } else {
+            $user->save();
         }
-
-        $user->save();
-        Log::info('User status updated:', $user->toArray());
-
+        Log::info('User status updated', ['user_id' => $user->id, 'email' => $user->email, 'status' => $newStatus->slug]);
         $this->sendStatusNotification($user, $newStatus, $tempPassword);
     }
 
     private function sendStatusNotification(User $user, Status $newStatus, ?string $tempPassword = null)
     {
-        Log::info('sendStatusNotification called', [
+        Log::info('Sending status notification', [
             'user_id' => $user->id,
+            'email' => $user->email,
             'status' => $newStatus->slug,
-            'tempPassword' => $tempPassword ? 'provided' : 'not provided',
         ]);
 
         if ($newStatus->slug === 'approved') {

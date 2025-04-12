@@ -17,7 +17,7 @@ return new class extends Migration {
             $table->unsignedBigInteger('bank_type_id')->nullable();
             $table->string('name');
             $table->string('email')->unique();
-            $table->string('password');
+            $table->string('password')->nullable();
             $table->string('message');
             $table->string('password_reset_token')->nullable();
             $table->timestamp('password_reset_token_expires_at')->nullable();

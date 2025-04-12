@@ -42,7 +42,7 @@ class User extends Authenticatable
         ];
     }
 
-    public function setPasswordAttribute($value)
+    /*public function setPasswordAttribute($value)
     {
         $pendingStatus = Status::where('name', 'pending')->first();
         if ($this->status_id && $this->status_id !== $pendingStatus->id) {
@@ -50,7 +50,7 @@ class User extends Authenticatable
         } else {
             $this->attributes['password'] = $value;
         }
-    }
+    }*/
 
     public function role()
     {
