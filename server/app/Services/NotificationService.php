@@ -6,8 +6,6 @@ use App\Models\User;
 use App\Models\Status;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
-use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
 use App\Mail\StatusUpdateNotification;
 use App\Models\UserNotificationMessage;
 
@@ -26,7 +24,17 @@ class NotificationService
   {
     $resetUrl = $this->buildResetUrl($user);
     $message = $this->buildApprovalMessage($tempPassword, $resetUrl);
+    Log::info('Preparing approval notification', [
+      'user_id' => $user->id,
+      'email' => $user->email,
+    ]);
     $this->sendNotification($user, $user->status, $message, $resetUrl, 'approved');
+  }
+
+  public function sendPasswordResetSuccessNotification(User $user): void
+  {
+    $message = $this->buildPasswordResetSuccessMessage($user);
+    $this->sendNotification($user, $user->status, $message, null, 'sent');
   }
 
   public function sendStatusUpdate(User $user, Status $status, ?int $updatedBy = null): void
@@ -41,11 +49,10 @@ class NotificationService
       return;
     }
 
-    Log::info('sendStatusUpdate called', [
+    Log::info('Preparing status update notification', [
       'user_id' => $user->id,
       'status' => $status->slug,
       'updatedBy' => $updatedBy,
-      'key' => $key,
     ]);
 
     switch ($status->slug) {
@@ -64,16 +71,6 @@ class NotificationService
     }
 
     $this->sentNotifications[] = $key;
-    Log::info('Notification added to sent list', ['key' => $key]);
-  }
-
-  /**
-   * Send a notification to confirm a successful password reset.
-   */
-  public function sendPasswordResetSuccessNotification(User $user): void
-  {
-    $message = $this->buildPasswordResetSuccessMessage($user);
-    $this->sendNotification($user, $user->status, $message, null, 'sent');
   }
 
   private function sendRejectedNotification(User $user, Status $status, ?int $updatedBy): void
@@ -108,11 +105,22 @@ class NotificationService
 
     $details['Message'] = $submittedData['message'] ?? 'N/A';
 
-    return json_encode([
-      'title' => 'Membership Request Received',
-      'intro' => 'Your membership request has been received. Here’s what we’ve recorded:',
-      'details' => $details,
-    ], JSON_THROW_ON_ERROR);
+    try {
+      return json_encode([
+        'title' => 'Membership Request Received',
+        'intro' => 'Your membership request has been received. Here’s what we’ve recorded:',
+        'details' => $details,
+      ], JSON_THROW_ON_ERROR);
+    } catch (\JsonException $e) {
+      Log::error('Failed to encode JSON for request received', [
+        'error' => $e->getMessage(),
+      ]);
+      return json_encode([
+        'title' => 'Membership Request Received',
+        'intro' => 'Your membership request has been received.',
+        'details' => ['Error' => 'Unable to load details'],
+      ]);
+    }
   }
 
   private function buildApprovalMessage(string $tempPassword, string $resetUrl): string
@@ -122,32 +130,6 @@ class NotificationService
       'intro' => 'Your membership request has been approved!',
       'tempPassword' => $tempPassword,
       'resetUrl' => htmlspecialchars($resetUrl),
-    ], JSON_THROW_ON_ERROR);
-  }
-
-  private function buildStatusUpdateMessage(User $user, Status $status, string $statusMessage): string
-  {
-    $role = $user->role ? $user->role->name : 'N/A';
-    $bankType = ($user->role && $user->role->slug === 'bank')
-      ? ($user->bankType->name ?? 'N/A')
-      : null;
-
-    $details = [
-      'Name' => $user->name ?? 'N/A',
-      'Email' => $user->email ?? 'N/A',
-      'Applied On' => $user->created_at ? $user->created_at->format('Y-m-d H:i:s') : 'N/A',
-      'Current Status' => $status->name ?? 'N/A',
-      'Role' => $role,
-    ];
-
-    if ($bankType) {
-      $details['Bank Type'] = $bankType;
-    }
-
-    return json_encode([
-      'title' => 'Membership Status Update',
-      'intro' => $statusMessage,
-      'details' => $details,
     ], JSON_THROW_ON_ERROR);
   }
 
@@ -173,6 +155,44 @@ class NotificationService
       return json_encode([
         'title' => 'Password Reset Successful',
         'intro' => 'Your password has been successfully updated.',
+        'details' => ['Error' => 'Unable to load details'],
+      ]);
+    }
+  }
+
+  private function buildStatusUpdateMessage(User $user, Status $status, string $statusMessage): string
+  {
+    $role = $user->role ? $user->role->name : 'N/A';
+    $bankType = ($user->role && $user->role->slug === 'bank')
+      ? ($user->bankType->name ?? 'N/A')
+      : null;
+
+    $details = [
+      'Name' => $user->name ?? 'N/A',
+      'Email' => $user->email ?? 'N/A',
+      'Applied On' => $user->created_at ? $user->created_at->format('Y-m-d H:i:s') : 'N/A',
+      'Current Status' => $status->name ?? 'N/A',
+      'Role' => $role,
+    ];
+
+    if ($bankType) {
+      $details['Bank Type'] = $bankType;
+    }
+
+    try {
+      return json_encode([
+        'title' => 'Membership Status Update',
+        'intro' => $statusMessage,
+        'details' => $details,
+      ], JSON_THROW_ON_ERROR);
+    } catch (\JsonException $e) {
+      Log::error('Failed to encode JSON for status update', [
+        'user_id' => $user->id,
+        'error' => $e->getMessage(),
+      ]);
+      return json_encode([
+        'title' => 'Membership Status Update',
+        'intro' => $statusMessage,
         'details' => ['Error' => 'Unable to load details'],
       ]);
     }
@@ -226,8 +246,6 @@ class NotificationService
         'user_id' => $user->id,
         'email' => $user->email,
         'status' => $status->slug,
-        'message' => $message,
-        'resetUrl' => $resetUrl,
       ]);
       Mail::to($user->email)->send(
         new StatusUpdateNotification($user, $status, $message, $resetUrl)
@@ -239,7 +257,6 @@ class NotificationService
         'user_id' => $user->id,
         'email' => $user->email,
         'status' => $status->slug,
-        'message' => $message,
         'error' => $e->getMessage(),
         'trace' => $e->getTraceAsString(),
       ]);
@@ -258,7 +275,8 @@ class NotificationService
   private function handleEmailFailure(User $user, Status $status, bool $emailSent): void
   {
     if (!$emailSent) {
-      Log::warning("Email delivery failed for user {$user->id}", [
+      Log::warning('Email delivery failed', [
+        'user_id' => $user->id,
         'email' => $user->email,
         'status' => $status->slug,
       ]);

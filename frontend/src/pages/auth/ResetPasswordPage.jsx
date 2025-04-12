@@ -48,6 +48,8 @@ const ResetPasswordPage = () => {
         new_password_confirmation: confirmPassword,
       });
 
+      console.log(response);
+
       if (response.success) {
         notify.success(response.message);
         setTimeout(() => navigate("/login"), 2000); // Redirect after 2s

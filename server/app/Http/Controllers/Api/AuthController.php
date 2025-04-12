@@ -41,7 +41,7 @@ class AuthController extends ApiController
                     Auth::logout();
                     return $this->errorResponse('Account not approved', 403);
                 }
-                if (!$user->password_updated) {
+                if (!$user->password_updated || $user->password === null) {
                     Auth::logout();
                     return $this->errorResponse('Password must be updated before login', 403);
                 }
@@ -78,15 +78,23 @@ class AuthController extends ApiController
                 'new_password' => 'required|string|min:8|confirmed',
             ]);
 
+            Log::info('Reset password attempt', [
+                'email' => $request->email,
+                'new_password' => $request->new_password,
+                'temporary_password' => $request->temporary_password,
+                'token' => substr($request->token, 0, 10) . '...',
+            ]);
+
+
             $user = User::where('email', $request->email)
                 ->where('password_reset_token', $request->token)
                 ->where('password_reset_token_expires_at', '>', now())
                 ->first();
 
             if (!$user) {
-                Log::warning('Invalid reset attempt: user or token not found', [
+                Log::warning('Invalid reset attempt: user or token not found or expired', [
                     'email' => $request->email,
-                    'token' => $request->token,
+                    'token' => substr($request->token, 0, 10) . '...',
                 ]);
                 return $this->errorResponse('Invalid or expired reset request', 403);
             }
@@ -95,6 +103,8 @@ class AuthController extends ApiController
                 Log::warning('Invalid temporary password', [
                     'user_id' => $user->id,
                     'email' => $user->email,
+                    'provided' => $request->temporary_password,
+                    'stored_hash' => substr($user->password, 0, 20) . '...', // Partial hash for debugging
                 ]);
                 // $this->notificationService->sendStatusUpdate($user, $user->status, auth()->user()->id);
                 return $this->errorResponse('Invalid reset request', 403);
@@ -103,6 +113,7 @@ class AuthController extends ApiController
             // Update password
             $user->password = Hash::make($request->new_password);
             $user->password_reset_token = null;
+            $user->password_reset_token_expires_at = null;
             $user->password_updated = true;
             $user->save();
 
