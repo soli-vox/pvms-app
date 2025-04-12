@@ -10,6 +10,7 @@ const authService = {
 
       if (status === "success") {
         const { user, token } = data;
+        localStorage.setItem("token", token);
         return { success: true, data: user, message, token };
       } else {
         notify.error(message);
@@ -20,19 +21,33 @@ const authService = {
     }
   },
 
-  logout: () => {
-    apiService.post("/logout");
-    localStorage.removeItem("token");
-    localStorage.removeItem("role");
-    notify.success("Logged out successfully");
+  logout: async () => {
+    try {
+      await apiService.post("/logout");
+      localStorage.removeItem("token");
+      notify.success("Logged out successfully");
+    } catch (error) {
+      console.error("Logout error:", error);
+      return errorHandler(error);
+    }
   },
 
   isAuthenticated: () => {
     return !!localStorage.getItem("token");
   },
 
-  getRole: () => {
-    return localStorage.getItem("role");
+  getCurrentAuthUser: async () => {
+    try {
+      const response = await apiService.get("/current-user");
+      const { status, message, data } = response.data;
+      if (status === "success") {
+        return { success: true, data: data.user, message };
+      } else {
+        return { success: false, message };
+      }
+    } catch (error) {
+      return errorHandler(error);
+    }
   },
 
   resetPassword: async ({

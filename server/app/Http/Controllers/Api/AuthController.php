@@ -58,6 +58,23 @@ class AuthController extends ApiController
         }
     }
 
+
+    public function getCurrentUser(Request $request)
+    {
+        try {
+            $user = $request->user();
+            if (!$user) {
+                return $this->errorResponse('Unauthenticated', 401);
+            }
+            $user->load(['role', 'status', 'bankType']);
+            return $this->successResponse('User fetched successfully', [
+                'user' => new UserResource($user)
+            ], 200);
+        } catch (\Exception $e) {
+            return $this->handleException($e);
+        }
+    }
+
     public function logout(Request $request)
     {
         $request->user()->currentAccessToken()->delete();

@@ -9,11 +9,14 @@ import ResetPasswordPage from "./pages/auth/ResetPasswordPage";
 
 import ProtectedRoute from "./routes/ProtectedRoute";
 import DashboardLayout from "./components/common/DashboardLayout";
+
 import AdminDashboard from "./pages/admin/AdminDashboard";
 import BankTypePage from "./pages/admin/BankTypePage";
 import RolePage from "./pages/admin/RolePage";
 import StatusPage from "./pages/admin/StatusPage";
 import MembershipRequestPage from "./pages/admin/MembershipRequestPage";
+
+import BankDashboard from "./pages/bank/BankDashboard";
 
 const App = () => {
   return (
@@ -36,6 +39,12 @@ const App = () => {
             path="/admin/dashboard/memberships"
             element={<MembershipRequestPage />}
           />
+        </Route>
+      </Route>
+
+      <Route element={<ProtectedRoute role="bank" />}>
+        <Route path="/bank/:slug" element={<DashboardLayout role="bank" />}>
+          <Route path="dashboard" element={<BankDashboard />} />
         </Route>
       </Route>
     </Routes>
