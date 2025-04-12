@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 use Laravel\Sanctum\HasApiTokens;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Foundation\Auth\User as Authenticatable;
@@ -39,6 +40,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'password_updated' => 'boolean',
+            'password_reset_token_expires_at' => 'datetime',
         ];
     }
 
@@ -74,6 +76,18 @@ class User extends Authenticatable
     public function updater()
     {
         return $this->belongsTo(User::class, 'updated_by');
+    }
+    /**
+     * Summary of getSlugAttribute yesle slug return garxa, 
+     * jastai Laxmi Bank cha vane, laxmi-bank return garcha
+     * @return string
+     */
+    public function getSlugAttribute(): string
+    {
+        if ($this->role && $this->role->slug === 'bank') {
+            return Str::slug($this->name);
+        }
+        return $this->role ? $this->role->slug : 'unknown';
     }
 }
 

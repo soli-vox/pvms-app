@@ -11,49 +11,77 @@ export function AuthProvider({ children }) {
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Check if user is already logged in on mount
-    const token = localStorage.getItem("token");
-    if (token) {
-      const storedRole = localStorage.getItem("role");
-      setUser({ token, role: { slug: storedRole } });
+    const checkAuth = async () => {
+      try {
+        const response = await authService.getCurrentAuthUser();
+        if (response.success) {
+          setUser(response.data);
+        } else {
+          setUser(null);
+          localStorage.removeItem("token");
+        }
+      } catch (error) {
+        console.error("Auth check failed:", error);
+        setUser(null);
+        localStorage.removeItem("token");
+      } finally {
+        setLoading(false);
+      }
+    };
+    if (authService.isAuthenticated()) {
+      checkAuth();
+    } else {
+      setLoading(false);
     }
-    setLoading(false);
   }, []);
 
   const login = async (email, password) => {
-    const result = await authService.login(email, password);
+    try {
+      const result = await authService.login(email, password);
+      if (result.success) {
+        const { data: userData, token, message } = result;
+        setUser(userData);
+        localStorage.setItem("token", token);
+        notify.success(message);
 
-    if (result.success) {
-      const { data: userData, token, message } = result;
-
-      setUser(userData);
-      localStorage.setItem("token", token);
-      localStorage.setItem("role", userData.role.slug);
-
-      notify.success(message);
-      const dashboardUrl = getDashboardUrl(userData.role.slug);
-      navigate(dashboardUrl);
-      return { success: true, data: userData, message, token };
-    } else {
-      notify.error(result.message);
-      return { success: false, message: result.message };
+        // Redirect based on role and slug
+        const dashboardUrl = getDashboardUrl(userData);
+        navigate(dashboardUrl);
+        return { success: true, data: userData, message, token };
+      } else {
+        notify.error(result.message);
+        return { success: false, message: result.message };
+      }
+    } catch (error) {
+      notify.error(error.message || "Login failed");
+      return { success: false, message: error.message || "Login failed" };
     }
   };
 
-  const logout = () => {
-    authService.logout();
-    setUser(null);
-    navigate("/login");
+  const logout = async () => {
+    try {
+      await authService.logout();
+      setUser(null);
+      navigate("/login");
+    } catch (error) {
+      console.error("Logout error:", error);
+      notify.error("Logout failed");
+    }
   };
 
-  const getDashboardUrl = (roleSlug) => {
-    switch (roleSlug) {
+  const getDashboardUrl = (userData) => {
+    if (!userData?.role?.slug) {
+      return "/login";
+    }
+    switch (userData.role.slug) {
       case "admin":
         return "/admin/dashboard";
       case "bank":
-        return `/bank/${user?.slug || "default"}/dashboard`;
+        return `/bank/${userData.slug || "default"}/dashboard`;
+      case "valuer":
+        return "/valuer/dashboard";
       default:
-        return "/login";
+        return "/dashboard";
     }
   };
 

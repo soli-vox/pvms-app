@@ -14,6 +14,7 @@ Route::get('/roles', [RoleController::class, 'index']);
 Route::get('/bank-types', [BankTypeController::class, 'index']);
 
 Route::middleware(['auth:sanctum'])->group(function () {
+    Route::get('/current-user', [AuthController::class, 'getCurrentUser']);
     Route::post('/logout', [AuthController::class, 'logout']);
 
     Route::prefix('admin')
